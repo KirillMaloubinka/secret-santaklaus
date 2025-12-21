@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import random
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
@@ -123,7 +124,34 @@ async def count_users(call: CallbackQuery):
 
 @dp.callback_query(F.data == "start_santa")
 async def start_santa(call: CallbackQuery):
-    await call.message.answer("🎉 Тайный Санта запущен!")
+    chat_id = call.message.chat.id
+    cur.execute("SELECT user_id, username FROM participants WHERE chat_id=?", (chat_id,))
+    participants = cur.fetchall()
+
+    if len(participants) < 2:
+        await call.message.answer("⚠️ Нужно минимум 2 участника для Тайного Санты")
+        await call.answer()
+        return
+
+    # Перемешиваем участников
+    shuffled = participants[:]
+    random.shuffle(shuffled)
+
+    # Делаем распределение
+    pairs = {}
+    for i in range(len(shuffled)):
+        giver = shuffled[i]
+        receiver = shuffled[(i + 1) % len(shuffled)]
+        pairs[giver[0]] = receiver[1]  # user_id -> username
+
+    # Отправляем каждому личное сообщение
+    for giver_id, receiver_username in pairs.items():
+        try:
+            await bot.send_message(giver_id, f"🎁 Привет! Твой тайный получатель подарка: {receiver_username}")
+        except Exception as e:
+            print(f"Не удалось отправить сообщение {giver_id}: {e}")
+
+    await call.message.answer("🎉 Тайный Санта запущен! Участники получили информацию в личные сообщения.")
     await call.answer()
 
 @dp.callback_query(F.data == "reset")
