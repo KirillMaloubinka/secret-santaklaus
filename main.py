@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import random
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
@@ -29,6 +31,15 @@ CREATE TABLE IF NOT EXISTS participants (
 cur.execute("""
 CREATE TABLE IF NOT EXISTS blocked_users (
     user_id INTEGER PRIMARY KEY
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS santa_pairs (
+    chat_id INTEGER,
+    giver_id INTEGER,
+    receiver_id INTEGER,
+    PRIMARY KEY (chat_id, giver_id)
 )
 """)
 
@@ -80,7 +91,6 @@ async def start(message: Message):
         user = message.from_user
         username = f"@{user.username}" if user.username else user.full_name
 
-        # ❌ ПРОВЕРКА БЛОКИРОВКИ
         cur.execute("SELECT 1 FROM blocked_users WHERE user_id=?", (user.id,))
         if cur.fetchone():
             await message.answer("🚫 Вы заблокированы и не можете участвовать.")
@@ -107,23 +117,19 @@ async def start(message: Message):
         reply_markup=get_admin_keyboard(message.chat.id) if is_admin else get_join_keyboard(message.chat.id)
     )
 
-# ===== /admin =====
+# ===== ADMIN =====
 @dp.message(F.text == "/admin")
 async def admin_panel(message: Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Нет доступа")
         return
 
-    await message.answer(
-        "👑 Панель администратора",
-        reply_markup=get_admin_keyboard(message.chat.id)
-    )
+    await message.answer("👑 Панель администратора", reply_markup=get_admin_keyboard(message.chat.id))
 
-# ===== АДМИН CALLBACKS =====
+# ===== CALLBACKS =====
 @dp.callback_query(F.data == "list")
 async def list_users(call: CallbackQuery):
-    chat_id = call.message.chat.id
-    cur.execute("SELECT username FROM participants WHERE chat_id=?", (chat_id,))
+    cur.execute("SELECT username FROM participants WHERE chat_id=?", (call.message.chat.id,))
     users = cur.fetchall()
     text = "\n".join(u[0] for u in users) if users else "Список пуст"
     await call.message.answer(text)
@@ -131,21 +137,60 @@ async def list_users(call: CallbackQuery):
 
 @dp.callback_query(F.data == "count")
 async def count_users(call: CallbackQuery):
-    chat_id = call.message.chat.id
-    cur.execute("SELECT COUNT(*) FROM participants WHERE chat_id=?", (chat_id,))
+    cur.execute("SELECT COUNT(*) FROM participants WHERE chat_id=?", (call.message.chat.id,))
     count = cur.fetchone()[0]
     await call.message.answer(f"👥 Участников: {count}")
     await call.answer()
 
+# ===== ЗАПУСК САНТЫ =====
 @dp.callback_query(F.data == "start_santa")
 async def start_santa(call: CallbackQuery):
-    await call.message.answer("🎉 Тайный Санта запущен!")
+    chat_id = call.message.chat.id
+
+    cur.execute(
+        "SELECT user_id, username FROM participants WHERE chat_id=?",
+        (chat_id,)
+    )
+    users = cur.fetchall()
+
+    if len(users) < 2:
+        await call.message.answer("❌ Нужно минимум 2 участника")
+        await call.answer()
+        return
+
+    random.shuffle(users)
+
+    cur.execute("DELETE FROM santa_pairs WHERE chat_id=?", (chat_id,))
+    db.commit()
+
+    for i in range(len(users)):
+        giver_id, giver_name = users[i]
+        receiver_id, receiver_name = users[(i + 1) % len(users)]
+
+        cur.execute(
+            "INSERT INTO santa_pairs (chat_id, giver_id, receiver_id) VALUES (?, ?, ?)",
+            (chat_id, giver_id, receiver_id)
+        )
+
+        try:
+            await bot.send_message(
+                giver_id,
+                f"🎅 Тайный Санта!\n\n"
+                f"🎁 Ты даришь подарок: {receiver_name}\n\n"
+                f"Никому не говори 🤫"
+            )
+        except:
+            pass
+
+    db.commit()
+
+    await call.message.answer("🎉 Тайный Санта успешно запущен!")
     await call.answer()
 
 @dp.callback_query(F.data == "reset")
 async def reset_game(call: CallbackQuery):
-    chat_id = call.message.chat.id
-    cur.execute("DELETE FROM participants WHERE chat_id=?", (chat_id,))
+    cur.execute("DELETE FROM participants WHERE chat_id=?", (call.message.chat.id,))
+    cur.execute("DELETE FROM santa_pairs WHERE chat_id=?", (call.message.chat.id,))
     db.commit()
     await call.message.answer("♻️ Игра очищена")
     await call.answer()
@@ -192,7 +237,7 @@ async def block_user_finish(message: Message, state: FSMContext):
     await message.answer("🚫 Пользователь удалён и заблокирован")
     await state.clear()
 
-# ===== ВЫХОД ИЗ ИГРЫ =====
+# ===== ВЫХОД =====
 @dp.callback_query(F.data == "leave")
 async def leave_game(call: CallbackQuery):
     cur.execute(
