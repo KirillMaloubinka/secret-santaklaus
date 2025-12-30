@@ -179,8 +179,8 @@ async def start_santa(call: CallbackQuery):
                 f"🎁 Ты даришь подарок: {receiver_name}\n\n"
                 f"Никому не говори 🤫"
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"❌ Не удалось отправить {giver_id}: {e}")
 
     db.commit()
 
@@ -246,6 +246,32 @@ async def leave_game(call: CallbackQuery):
     )
     db.commit()
     await call.answer("🚪 Вы вышли из игры")
+
+# ===== ПРОСМОТР ПАР (ТОЛЬКО АДМИН, РАБОТАЕТ С АЙФОНА) =====
+@dp.message(F.text == "/pairs")
+async def show_pairs(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    cur.execute("""
+        SELECT 
+            p1.username,
+            p2.username
+        FROM santa_pairs s
+        JOIN participants p1 ON s.giver_id = p1.user_id
+        JOIN participants p2 ON s.receiver_id = p2.user_id
+    """)
+    pairs = cur.fetchall()
+
+    if not pairs:
+        await message.answer("❌ Тайный Санта ещё не запущен")
+        return
+
+    text = "🎅 *Распределение Тайного Санты:*\n\n"
+    for giver, receiver in pairs:
+        text += f"🎁 {giver} → {receiver}\n"
+
+    await message.answer(text, parse_mode="Markdown")
 
 # ===== ЗАПУСК =====
 async def main():
